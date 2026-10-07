@@ -1,0 +1,900 @@
+---
+title: "Progetto Laboratorio di Statistica"
+subtitle: "Analisi delle vendite al dettaglio nel settore abbigliamento (FRED)"
+author: "Amerigo Ciriello"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+pacchetti <- c("dplyr", "ggplot2", "imputeTS", "forecast",
+               "psych", "dygraphs", "seasonal", "gridExtra")
+
+for (p in pacchetti) {
+  if (!requireNamespace(p, quietly = TRUE)) {
+    install.packages(p, repos = "https://cloud.r-project.org")
+  }
+}#qualora non fossero installate tutte le librerie
+
+library(dplyr)
+library(ggplot2)
+library(imputeTS)
+library(forecast)
+library(psych)
+library(dygraphs)
+library(seasonal)
+library(gridExtra)
+```
+
+# 1. Introduzione
+
+In questo report analizziamo la serie storica delle vendite al dettaglio
+dei negozi di abbigliamento negli Stati Uniti. L'obiettivo è applicare i
+principali strumenti di analisi delle serie temporali studiati nel
+corso: analisi esplorativa, individuazione di outlier, decomposizione,
+trasformazioni, regressione e metodi di previsione.
+
+### 1.1 Analisi strutturale
+
+I dati provengono dalla *Monthly Retail Trade Survey - MRTS* e fornisce
+stime mensili sul valore in dollari delle vendite al dettaglio ma anche
+dei servizi di ristorazione e delle scorte di magazzino. La
+partecipazione al sondaggio è volontaria ed è autorizzata dal *Title 13
+United States code*. Il campionamento avviene dal 1951 e viene rinnovato
+(aggiornamento strutturale) ogni 5 anni. Coinvolge circa 13.000 aziende di vendita al dettaglio
+con dipendenti retribuiti. Esse vengono stratificate in base al
+fatturato e al tipo di attività principale. Circa 2.500 delle 13.000
+vengono selezionate con certezza, le restanti vengono selezionate
+casualmente.
+
+**Descrizione Completa:**
+<https://www.census.gov/retail/mrts/about_the_surveys.html>
+
+**Link alla serie storica:**(codice `MRTSSM4481USN`)
+<https://fred.stlouisfed.org/series/MRTSSM4481USN>
+
+**Periodo Analizzato:** *gennaio 1992 – ultima data disponibile*
+
+**Frequenza:** *mensile*
+
+**Unità di misura:** *milioni di dollari*
+
+**Tipo di dato:** *grezzi (non destagionalizzati)*
+
+```{r, echo=TRUE,include=FALSE}
+dati <- read.csv("MRTSSM4481USN.csv")
+dati$observation_date <- as.Date(dati$observation_date)
+dati$MRTSSM4481USN<- as.numeric(dati$MRTSSM4481USN)
+```
+
+```{r,echo=FALSE}
+glimpse(dati)
+```
+```{r,echo=FALSE}
+head(dati)
+```
+
+
+Abbiamo un numero di osservazioni pari a 411. Mediante un *glimpse* dei
+dati possiamo notare che: *observation_date* è formattato come data e *MRTSSM4481USN* formattato come numero decimale.
+
+# 2. Analisi esplorativa 
+
+La seguente analisi esplorativa è eseguita su dati grezzi.
+
+### 2.1 Analisi esplorativa generale
+
+
+```{r}
+par(mfrow=c(1,3))
+hist(dati$MRTSSM4481USN,col="green",main="Istogramma di vendite retail + Densità",freq=FALSE,
+     xlab="Vendite In Milioni",ylab="Densità")
+lines(density(dati$MRTSSM4481USN))
+boxplot(dati$MRTSSM4481USN,main="Boxplot di vendite retail")
+
+hist(dati$MRTSSM4481USN,main="Istogramma con frequenza",freq=TRUE,
+     xlab="Vendite In Milioni",ylab="Frequenza")
+```
+
+```{r}
+psych::describe(dati$MRTSSM4481USN)
+```
+
+La distribuzione presenta una tendenza centrale dato che la media pari a
+$12480.7$ e la mediana pari a $12378$ sono molto vicine tra loro. Il
+range è molto ampio e pari a $26908$. La deviazione standard è pari a
+$4356.8$. La distribuzione presenta una live asimmetria positiva pari a
+$0.51$ e una kurtosi pari a $0.21$.
+
+
+
+```{r,echo=FALSE}
+hist(dati$MRTSSM4481USN, main="Istogramma con Media e Mediana", freq=TRUE,
+     xlab="Vendite In Milioni", ylab="Frequenza")
+abline(v=mean(dati$MRTSSM4481USN), col="black", lwd=2)
+abline(v=median(dati$MRTSSM4481USN), col="red", lwd=2, lty=2)
+legend("topright", legend=c("Media", "Mediana"),
+       col=c("black", "red"), lwd=2, lty=c(1, 2))
+```
+
+### 2.2 Dati mancanti
+
+
+```{r,include=FALSE}
+#impostazione serie storica
+Vendite_Retail_USA <- ts(dati$MRTSSM4481USN, start=c(1992, 1), frequency=12)
+```
+
+
+```{r, echo=TRUE}
+statsNA(Vendite_Retail_USA)
+```
+
+Non essendovi dati mancanti non è necessario effettuare alcun processo di imputazione.
+
+
+
+### 2.3 Time plot
+
+
+```{r,echo=FALSE}
+autoplot(Vendite_Retail_USA) +
+  theme_linedraw() +
+  labs(title="Vendite di abbigliamento al dettaglio negli USA",
+       x="Anno", y="Milioni di dollari")+
+  scale_x_continuous(breaks=seq(1992, 2026, by = 2))
+```
+
+```{r,echo=FALSE}
+dyRangeSelector(dygraph(Vendite_Retail_USA, main = "Vendite di abbigliamento al dettaglio negli USA (Grafico interattivo)"))
+```
+
+
+La serie presenta un trend crescente sul lungo periodo, una forte stagionalità con picco regolare a dicembre e minimo a inizio anno. Essendo quindi a cadenza fissa annuale, le oscillazioni 
+non costituiscono una componente ciclica.
+L'ampiezza dei picchi cresce con il livello della serie il che ci suggerisce la presenza di eteroschedasticità.
+Abbiamo un evidente crollo nel 2020 (coincide con il lockdown COVID), molto meno evidente
+è il crollo dovuto  alla crisi dei mutui subprime del 2008.
+
+
+```{r,echo=FALSE}
+diff <- tapply(Vendite_Retail_USA, floor(time(Vendite_Retail_USA)), function(x) max(x) - min(x))
+anni <- as.numeric(names(diff))
+plot(anni, diff, type = "l",
+     main = "Progressione differenze tra picchi per intero arco temporale",
+     xlab = "Anno", ylab = "Escursione annua (max - min)")
+```
+
+Il grafico dell' escursione annua (differenze tra picchi ) ci suggerisce la presenza di una struttura di eteroschedasticità moltiplicativa (Da verificare). La varianza non è costante nel tempo e l'ampiezza
+delle fluttuazioni stagionali cresce proporzionalmente al livello della serie.
+
+
+
+
+### 2.4 Identificazione preliminare degli Outlier
+
+
+```{r, echo=TRUE}
+tsoutliers(Vendite_Retail_USA)
+```
+
+```{r,echo=FALSE}
+OUTL <- tsoutliers(Vendite_Retail_USA)
+df_out <- data.frame(
+  tempo  = as.numeric(time(Vendite_Retail_USA))[OUTL$index],
+  valore = as.numeric(Vendite_Retail_USA)[OUTL$index]
+)
+
+autoplot(Vendite_Retail_USA) +
+  geom_point(data = df_out, aes(x = tempo, y = valore),
+             color = "red") +
+  labs(title = "Vendite abbigliamento USA: potenziali outlier su serie grezza",
+       x = "Anno", y = "Milioni di dollari") +
+  scale_x_continuous(breaks=seq(1992, 2026, by = 2))+
+  theme_linedraw()
+```
+
+Alcuni periodi vengono segnalati come anomali: la crisi finanziaria del 2008-2009, il blocco del 2020 legato al COVID e infine alcuni valori negli ultimi anni della serie. Parte di queste segnalazioni potrebbe essere frutto dell'eteroschedasticità. Dove le oscillazioni sono più ampie la funzione le marca come osservazioni insolite, anche quando non lo sono realmente.
+La decisione di rimuovere o meno un outlier non è automatica e dipende da due fattori: la natura del valore e l'obiettivo dell'analisi. Un'osservazione frutto di errore di misura va corretta o rimossa mentre una osservazione eccezionale (come il COVID) va trattata in base a ciò che si intende studiare.
+
+
+### 2.5 Analisi della stagionalità
+
+```{r,echo=FALSE}
+ggseasonplot(Vendite_Retail_USA, year.labels=TRUE, year.labels.left=TRUE) +
+ylab("$ milioni") +
+ggtitle("Seasonal plot: Vendite retail abbigliamento USA")+theme_linedraw()
+```
+
+
+L’analisi del grafico stagionale mostra la presenza di un trend crescente nel lungo periodo, dovuto probabilmente all' espansione del settore del fast fashion oppure a cambiamenti nelle dinamiche dei consumi.C'è un pattern chiaro che si ripete a dicembre, le vendite si mantengono stabili per tutto l'anno per poi "impennarsi" a fine anno.
+Il 2020 si distingue chiaramente con un drastico crollo delle vendite ad aprile.
+
+
+
+```{r,echo=FALSE}
+ggsubseriesplot(Vendite_Retail_USA) +
+ylab("$ milioni") +
+ggtitle("Seasonal subseries plot: Vendite retail abbigliamento USA")+theme_linedraw()
+```
+
+
+Il seasonal subseries plot scompone la serie per mese, mostrando in ciascun pannello l'evoluzione di quel mese nel corso degli anni insieme alla relativa media (in blu). Il confronto tra le medie mensili riconferma che la componente stagionale è fortemente concentrata a dicembre, mentre i mesi da gennaio a novembre presentano livelli medi simili tra loro. Le linee interne mostrano inoltre che la crescita di lungo periodo riguarda in modo sistematico in tutti i mesi.
+
+
+
+### 2.6 Autocorrelazione (ACF su dati grezzi)
+
+```{r,echo=FALSE}
+ggAcf(Vendite_Retail_USA)+theme_linedraw()
+```
+
+Il correlogramma ci dice che la serie è non stazionaria e non compatibile con un processo white noise. Tutte le autocorrelazioni risultano significative (oltre i limiti di confidenza) e decrescono molto lentamente all'aumentare del lag, ciò indica presenza di trend. Si osservano inoltre picchi marcati ai lag 12 e 24, corrispondenti ai cicli annuali dei dati mensili, che segnalano una forte componente stagionale con ricorrenza regolare di anno in anno. La struttura evidenziata dall'ACF motiva l'applicazione di trasformazioni per stabilizzare varianza, detrendizzare e destagionalizzare.
+
+
+# 3. Trasformazione, decomposizione e differenziazione
+
+
+### 3.1 Aggiustamento rispetto all' inflazione
+
+Dato che nelle serie storiche economico-finanziare i valori nominali non sono direttamente confrontabili nel tempo poichè il potere d'acquisto cambia a causa di fattori (Esempio: inflazione), è necessario aggiustare i valori correggendoli per CPI (Consumer Price Index). La conversione avviene in questo modo:
+$$x_t = \frac{y_t}{z_t} \times CPI_{base}$$
+
+dove ${y_t}$ è il valore nominale al tempo $t$, ${z_t}$ è l'indice dei prezzi (CPI) al tempo $t$ e $CPI_{base}$ è il CPI dell'ultimo mese disponibile. La serie reale è così espressa a **prezzi correnti**: i valori sono confrontabili nel tempo e interpretabili come dollari di oggi.
+
+
+```{r,echo=TRUE}
+CPI <- read.csv("CPIAUCNS.csv")
+cpi_full <- CPI[CPI$observation_date >= "1992-01-01", ]
+cpi_ts <- ts(cpi_full$CPIAUCNS, start = c(1992, 1), frequency = 12)
+finestra <- ts.intersect(Vendite_Retail_USA, cpi_ts)
+cpi_base <- tail(as.numeric(finestra[, "cpi_ts"]), 1)   # CPI dell'ultimo mese = prezzi correnti
+Vendite_Reali_CPI <- (finestra[, "Vendite_Retail_USA"] / finestra[, "cpi_ts"]) * cpi_base
+```
+
+
+Controlliamo che la serie corretta per CPI non abbia dati mancanti
+```{r}
+statsNA(Vendite_Reali_CPI)
+```
+
+Dato che presenta 1 NA possiamo procedere ad applicare un metodo di imputazione basato su Interpolazione lineare.
+
+```{r}
+Vendite_Reali_CPI2 <- na_interpolation(Vendite_Reali_CPI)
+ggplot_na_imputations(Vendite_Reali_CPI, Vendite_Reali_CPI2, theme=ggplot2::theme_classic(), size_points=3)
+```
+
+
+
+```{r}
+par(mfrow=c(1,2))
+plot(Vendite_Retail_USA,main="Serie grezza")
+plot(Vendite_Reali_CPI2,main="Serie corretta CPI")
+```
+
+Il confronto tra le serie (nominale vs corretta per CPI) rivela un aspetto interessante. Sui valori nominali il trend è crescente, le vendite sembrano aumentare ininterrottamente dal 1992 a oggi. Dopo la correzione per inflazione,però, la serie reale mostra una crescita sostenuta fino alla metà degli anni 2000, seguita da una lunga fase di sostanziale stagnazione — i volumi reali restano grosso modo fermi per più di 10 anni, c'è una ripresa solo dopo lo shock del Covid. Gran parte dell'incremento nominale registrato negli ultimi vent'anni era quindi attribuibile all'aumento dei prezzi e non a una reale espansione delle quantità vendute.
+
+
+```{r,echo=FALSE}
+diff_per_anno <- tapply(Vendite_Reali_CPI2, floor(time(Vendite_Reali_CPI2)), function(x) max(x) - min(x))
+anni <- as.numeric(names(diff_per_anno))
+plot(anni, diff_per_anno, type = "l",
+     main = "Progressione differenze tra picchi per intero arco temporale",
+     xlab = "Anno", ylab = "Escursione annua (max - min)")
+```
+
+La cosa interessante che eviciamo è che l'escursione annua calcolata sulla serie corretta per CPI non mostra alcuna tendenza crescente, si mantiene attorno a una banda stabile. Questo ci suggerisce che una applicare una trasformazione alla serie per stabilizzarne la varianza potrebbe non servire,una volta depurata dall'inflazione, l'ampiezza delle oscillazioni stagionali non dipende più dal livello della serie.
+Le uniche due deviazioni sono interpretabili 2008-2009 riconferma la crisi dei mutui subprime, il picco isolato del 2020 riflette il Covid. Essendo il 2026 non concluso, le differenze non sono ancora interpretabili e quindi possiamo tralasciarle.
+Ne concludiamo che l'eteroschedasticità osservata sui dati nominali era dunque in larga parte un artefatto dei prezzi e che probabilmente non servirà applicare alcun tipo di trasformazione (Ne segue verifica).
+
+
+
+### 3.2 Trasformata Box-Cox 
+
+```{r,echo=TRUE}
+lambda<-BoxCox.lambda(Vendite_Reali_CPI2,method = "loglik")
+lambda
+```
+
+```{r,echo=FALSE}
+par(mfrow = c(1, 2))
+plot(Vendite_Reali_CPI2, main = "Serie reale (nessuna trasf.)", ylab = "Vendite reali")
+plot(BoxCox(Vendite_Reali_CPI2, lambda),
+     main = paste0("Box-Cox lambda = ", round(lambda, 2)), ylab = "trasformata")
+```
+
+La stima con il metodo della massima verosimiglianza restituisce $\lambda \approx 1.7$, un valore che suggerirebbe una trasformazione di potenza. Tuttavia mediante il confronto grafico, possiamo dedurre che non è necessaria. I pannelli mostrano che la serie trasformata è strutturalmente identica a quella reale cambia solo la scala dei valori,non riduce l'ampiezza delle oscillazioni né stabilizza ulteriormente la varianza. Una volta rimossa l'inflazione, l'ampiezza delle fluttuazioni stagionali non dipende più dal livello della serie. Applicare Box-Cox introdurrebbe solo una ulteriore distorsione di scala.Lavoriamo quindi sulla serie reale non trasformata.
+
+
+### 3.3 Decomposizione
+
+La decomposizione scompone la serie nelle sue componenti strutturali. Secondo lo schema additivo le componenti sono date da
+$y_t = T_t + S_t + R_t$
+, dove $T_t$ è il trend-ciclo, $S_t$ è la componente stagionale e $Rt$ il residuo. Dato che stiamo lavorando sulla serie corretta per inflazione, in base a quanto osservato, possiamo escludere le decomposizione moltiplicativa poichè l'ampiezza delle variazioni stagionali è costante nel tempo indipendentemente dal livello della serie.
+Successivamente applicheremo le decomposizioni X11, X13 SEATS ed infine la STL robusta.
+
+
+#### 3.3.1 Decomposizione additiva classica
+
+La decomposizione additiva classica si basa sulle medie mobili che permettono di smussare le fluttuazioni casuali mettendo in evidenza il trend. Dato che il periodo stagionale è pari possiamo usare una media mobile pesata di ordine $m+1$. Sia *MA: Moving Average* useremo una
+*2x12MA*
+
+```{r,echo=FALSE}
+additive<-decompose(Vendite_Reali_CPI2, type="additive")#la serie è in frequency=12 
+autoplot(additive)+ggtitle("Decomposizione additiva per vendite retail")+theme_linedraw()
+```
+
+La cosa interessante da notare è che il residuo è piccolo e senza struttura per quasi tutto il periodo, tranne per un'esplosione nel 2020. Questo è il limite della decomposizione classica.Il Covid non viene assorbito dal trend ma si riversa tutto nel residuo, inoltre guardando il pannello del trend abbiamo comunque distorto la stima di esso.
+
+
+#### 3.3.2 Decomposizione X11
+
+```{r,echo=FALSE}
+x11.fit <- seas(Vendite_Reali_CPI2, transform.function="none", x11="")
+autoplot(x11.fit) + ggtitle("Decomposizione X11 per vendite retail")+theme_linedraw()
+```
+
+La X11 incorpora il crollo del 2020 nel trend senza isolarlo nel residuo distorcendo di conseguenza la stima del trend.
+
+
+#### 3.3.3 Decomposizione X13 SEATS
+
+```{r,echo=FALSE}
+x13.seats <- seas(Vendite_Reali_CPI2,transform.function = "none")
+autoplot(x13.seats) + ggtitle("Decomposizione X13 SEATS per vendite retail")+theme_linedraw()
+```
+
+Analogo ala X11 i metodi risultano equivalenti.
+
+#### 3.3.4 Decomposizione STL robusta
+
+```{r,echo=FALSE}
+stl.fit <- stl(Vendite_Reali_CPI2, s.window="periodic", robust=TRUE)
+autoplot(stl.fit) +
+  ggtitle("Decomposizione STL robusta per vendite retail")+theme_linedraw()
+```
+
+STL riesce a riconoscere il 2020 come un'anomalia, mantiene il trend abbastanza liscio e riversa tutto nel residuo.
+
+
+```{r}
+autoplot(Vendite_Reali_CPI2, series = "Serie reale", alpha = 0.4) +
+  autolayer(trendcycle(additive),series = "Classica",size = 1) +
+  autolayer(trendcycle(stl.fit),series = "STL robusta", size = 1) +
+  autolayer(trendcycle(x11.fit),series = "X11",         size = 1) +
+  autolayer(trendcycle(x13.seats),series = "X13SEATS",size = 1) +
+  xlab("Anno") + ylab("Milioni $") +
+  ggtitle("Confronto Decomposizioni") +
+  guides(colour = guide_legend(title = "Tipologia")) +
+  theme_linedraw()
+```
+
+Confrontando le quattro decomposizioni complete, le componenti stagionali risultano pressoché identiche in tutti i metodi.La differenza decisiva sta nel trattamento del 2020. La decomposizione STL robusta produce un trend abbastanza liscio in corrispondenza del Covid e riversa l'intero shock nella componente residua, dove infatti si osserva il picco negativo più marcato, essendo un evento eccezionale è corretto che venga isolato. La decomposizione classica si comporta in modo analogo, seppur con un trend leggermente meno regolare. X11 e X13 SEATS incorporano gran parte del crollo nel trend, che precipita nel 2020, conservando il residuo in modo contenuto.Per questi motivi adottiamo la STL robusta come riferimento.
+
+
+
+### 3.4 Outlier riesame
+
+```{r,echo=TRUE}
+R_t <- stl.fit$time.series[, "remainder"]
+tsoutliers(R_t)
+```
+
+
+```{r,echo=FALSE}
+OUTL_R <- tsoutliers(R_t)
+df_out_R <- data.frame(
+  tempo  = as.numeric(time(R_t))[OUTL_R$index],
+  valore = as.numeric(R_t)[OUTL_R$index]
+)
+
+autoplot(R_t) +geom_point(data = df_out_R, aes(x = tempo, y = valore),
+             color = "red") +
+  labs(title = "Riesame outlier sulla componente residua (STL)",
+       x = "Anno", y = "Residuo") +
+  scale_x_continuous(breaks = seq(1992, 2026, by = 2)) +
+  theme_linedraw()
+```
+
+Riapplicando la procedura di identificazione degli outlier sulla componente residua (Serie ripulita da trend e stagionalità) della decomposizione STL notiamo che vi sono poche osservazioni anomale rispetto al primo esame. Queste ultime sono interpretabili come anomalie. Questo, in fase di modellazione, potrebbe giustificare il trattamento del periodo COVID tramite dummy.
+
+
+### 3.5 Stazionarietà e Differenziazione
+
+Una serie stazionaria guardandola in qualsiasi finestra temporale dovrebbe apparire statisticamente simile,non presenta pattern prevedibili nel lungo periodo e oscilla intorno a un livello fisso con varianza costante. In pratica le sua prorprietà statistiche non dipendono dal momento in cui la osserviamo.
+
+Anche dopo la correzione per l'inflazione, la serie reale non si presenta stazionaria. Come osservato nel confronto grafico permangono sia la fluttuazione stagionale sia un trend di fondo.
+Per renderla stazionaria ricorriamo alla differenziazione che sostituisce ad ogni valore la sua variazione rispetto ad un valore precedente. Una eventuale differenza prima rimuoverà il trend residuo.
+
+
+```{r,echo=TRUE}
+nsdiffs(Vendite_Reali_CPI2)   #restituisce il numero di differenze stagionali
+```
+
+L'output ci suggeriesce $1$ differenza stagionale. La applichiamo 
+
+```{r,echo=TRUE}
+Vendite_Reali_DIFFstag <- diff(Vendite_Reali_CPI2, lag = 12)
+ndiffs(Vendite_Reali_DIFFstag)
+```
+
+Restituendo $0$ la sola differenza stagionale rende già la serie stazionaria. Non serve alcuna differenza prima.
+
+
+```{r,echo=FALSE}
+Vendite_CPI2_STAZ <- Vendite_Reali_DIFFstag
+autoplot(Vendite_CPI2_STAZ) +
+  labs(title = "Serie reale dopo differenza stagionale (lag 12)",
+       x = "Anno", y = "Variazioni") +
+  theme_linedraw()
+```
+
+
+Dopo la differenza stagionale la serie ora oscilla attorno a un livello fisso pari a zero.Confrontando finestre temporali il comportamento appare omogeneo: la media resta costante e l'ampiezza delle fluttuazioni è sostanzialmente stabile lungo tutto l'arco temporale. Il "prevedibile" (trend e stagionalità) è stato rimosso e resta soltanto la componente irregolare. L'unica eccezione è il biennio 2020-2021, dove si osservano oscillazioni molto maggiori. Non si tratta però di una violazione strutturale della stazionarietà, bensì di un evento isolato come descritto in precedenza.
+
+
+```{r,echo=FALSE}
+ggAcf(Vendite_CPI2_STAZ) +
+  theme_linedraw() +
+  ggtitle("ACF della serie reale differenziata")
+```
+
+
+L'ACF della serie differenziata mostra un quadro diverso da quello osservato sui dati grezzi: il decadimento delle autocorrelazioni (Sintomo di trend) è completamente scomparso. Le autocorrelazioni ora oscillano attorno allo zero, segno che la componente di trend è stato effettivamente rimossa.
+La serie non è white noise perchè diverse autocorrelazioni superano le bande di confidenza.
+
+
+# 4. Confronto con serie analoga
+
+Per rendere sensato il confronto tra due serie storiche è opportuno rimuovere trend e stagionalità, così da evitare il problema della correlazione spuria (serie che sembrano correlate solo perché crescono entrambe nel tempo). Affianchiamo all'abbigliamento una seconda serie ovvero:
+
+**Retail Sales: Beer, Wine, and Liquor Stores** (`MRTSSM4453USN`): vendite al dettaglio mensili di birra, vino e liquori, in milioni di dollari. Dato che è un mercato con dinamiche proprie, ci aspettiamo che sia scollegato dall'abbigliamento.
+
+Anche questa serie viene deflazionata con lo stesso CPI e la stessa base (`cpi_base`) usati per l'abbigliamento, così il confronto avviene interamente su valori reali.
+
+```{r,echo=TRUE}
+dati3 <- read.csv("MRTSSM4453USN.csv")
+Liquor_nom <- ts(as.numeric(dati3$MRTSSM4453USN), start=c(1992,1), frequency=12)
+fin_liquor <- ts.intersect(Liquor_nom, cpi_ts)
+Liquor_Reali_pre <- (fin_liquor[,"Liquor_nom"] / fin_liquor[,"cpi_ts"]) * cpi_base
+```
+
+```{r}
+statsNA(Liquor_Reali_pre)
+```
+
+Dato che è presente un NA allora usiamo come metodo di imputazione l'interpolazione lineare
+
+```{r}
+Liquor_Reali <- na_interpolation(Liquor_Reali_pre)
+ggplot_na_imputations(Liquor_Reali_pre, Liquor_Reali, theme=ggplot2::theme_classic(), size_points=3)
+```
+
+
+### 4.1 Confronto grafico
+
+I due settori hanno ordini di grandezza molto diversi,di conseguenza li rappresentiamo in pannelli con scala verticale indipendente.
+
+```{r,echo=FALSE}
+
+g1 <- autoplot(Vendite_Reali_CPI2) +
+  labs(title="Abbigliamento", x="Anno", y="Milioni $ reali") +
+  theme_linedraw()
+g2 <- autoplot(Liquor_Reali) +
+  labs(title="Liquori", x="Anno", y="Milioni $ reali") +
+  theme_linedraw()
+grid.arrange(g1, g2, ncol=1)
+```
+
+Dal confronto notiamo che l'abbigliamento ha una forte stagionalità con picco a dicembre e un crollo nel 2020. Liquor invece durante il Covid non crolla ma cresce difatti con la chiusura di bar e ristoranti l'alcool è stato prevalentemente consumato nelle abitazioni. Già visivamente i due settori si comportano in modo diverso.
+
+
+
+### 4.2 Correlazione al netto di trend e stagionalità
+
+Utilizziamo come prima la decomposizione STL robusta. Rimuoviamo trend e stagionalità.
+
+```{r,echo=FALSE}
+rem_abbigliamento <- stl(Vendite_Reali_CPI2, s.window = "periodic")$time.series[, "remainder"]
+rem_liquor        <- stl(Liquor_Reali,       s.window = "periodic")$time.series[, "remainder"]
+df_rem <- data.frame(
+  abbigliamento = as.numeric(rem_abbigliamento),
+  liquori       = as.numeric(rem_liquor)
+)
+ggplot(df_rem, aes(abbigliamento, liquori)) +
+  geom_point(alpha=0.5) +
+  geom_smooth(method="lm", se=FALSE, colour="red") +
+  labs(title="Residui STL: abbigliamento vs liquori",
+       x="Residuo abbigliamento", y="Residuo liquori") +
+  theme_linedraw()
+```
+
+```{r,echo=TRUE}
+cor(as.numeric(rem_abbigliamento), as.numeric(rem_liquor))
+```
+
+La correlazione è leggermente positiva ma molto debole. Il grafico mostra che, rispetto agli shock imprevisti, i due settori sono in larga parte disaccoppiati nel contemporaneo, la reazione alle anomalie nello stesso istante è praticamente indipendente. Questo non esclude però legami a ritardi diversi da zero, che verifichiamo di seguito con la CCF.
+
+Aggiungiamo infine la **cross-correlation function (CCF)**, per verificare se esista un qualche legame a ritardi diversi da zero.
+
+```{r,echo=FALSE}
+ccf(as.numeric(rem_abbigliamento), as.numeric(rem_liquor),
+    lag.max = 12, main = "CCF: abbigliamento vs liquori (residui)")
+```
+
+La CCF presenta alcuni picchi significativi (oltre le bande di confidenza) pertanto, non possiamo dire che i settori seguano logiche completamente autonome, ma possiamo dire che le loro interazioni si manifestano non in modo simultaneo bensì differite nel tempo.
+
+
+# 5. Modellazione e previsione
+
+### 5.1 Metodi Benchmark
+
+I metodi benchmark rappresentano gli standard di riferimento più semplici per l'elaborazione delle previsioni. Nonostante lo sviluppo di modelli più avanzati e potenzialmente più performanti, i benchmark rimangono un termine di paragone per valutarne l'effettiva efficacia.
+
+#### 5.1.1 Average 
+
+Le previsioni dei valori futuri sono uguali alla media delle osservazioni passate.
+
+```{r}
+meanf(Vendite_Reali_CPI2, h=12)
+```
+
+
+
+```{r,echo=FALSE}
+plot1 <- autoplot(Vendite_Reali_CPI2) +
+  autolayer(meanf(Vendite_Reali_CPI2, h=12), series="Media", PI=TRUE) +
+  theme_linedraw() +
+  labs(title = "Previsione Average con Intervalli di Confidenza")
+plot2 <- autoplot(Vendite_Reali_CPI2) +
+  autolayer(meanf(Vendite_Reali_CPI2, h=12), series="Media", PI=FALSE) +
+  theme_linedraw() +
+  labs(title = "Previsione Average Puntuale")
+grid.arrange(plot1, plot2)
+```
+
+#### 5.1.2 Naive 
+
+Tutte le previsioni assumano il valore dell’ultima osservazione registrata
+
+```{r}
+naive(Vendite_Reali_CPI2, h=12)
+```
+
+
+```{r,echo=FALSE}
+plot3<-autoplot(Vendite_Reali_CPI2) +
+autolayer(naive(Vendite_Reali_CPI2, h=12), series="Naïve", PI=FALSE)+
+  labs(title = "Previsione Naive puntuale")+
+  theme_linedraw()
+
+plot4<-autoplot(Vendite_Reali_CPI2) +
+autolayer(naive(Vendite_Reali_CPI2, h=12), series="Naïve", PI=TRUE)+
+  labs(title = "Previsione Naive con Intervalli di Confidenza")+
+  theme_linedraw()
+
+grid.arrange(plot3, plot4)
+```
+
+#### 5.1.3 Seasonal Naive
+
+Estende il metodo Naive al caso di serie stagionali: ogni previsione viene impostata pari all’ultimo valore osservato nella stessa stagione, anziché all’ultima osservazione disponibile.
+
+```{r}
+snaive(Vendite_Reali_CPI2, h=12)
+```
+
+
+```{r,echo=FALSE}
+plot5<-autoplot(Vendite_Reali_CPI2) +
+autolayer(snaive(Vendite_Reali_CPI2, h=12), 
+          series="Seasonal Naive", PI=TRUE)+
+  labs(title = "Previsione Seasonal Naive con intervalli di confidenza")+
+  theme_linedraw()
+
+plot6<-autoplot(Vendite_Reali_CPI2) +
+autolayer(snaive(Vendite_Reali_CPI2, h=12), 
+          series="Seasonal Naive ", PI=FALSE)+labs(title = "Previsione Seasonal Naive puntuale")+
+  theme_linedraw()
+
+grid.arrange(plot5,plot6)
+```
+
+
+#### 5.1.4 Drift 
+
+Il Drift method permette alle previsioni di crescere nel tempo. Il drift è la variazione media osservata sulla base delle informazioni passate (variazione nel tempo).
+
+```{r}
+rwf(Vendite_Reali_CPI2, h=12, drift=TRUE)
+```
+
+
+```{r,echo=FALSE}
+plot7<-autoplot(Vendite_Reali_CPI2) +
+autolayer(rwf(Vendite_Reali_CPI2, h=12, drift=TRUE), 
+          series="Drift", PI=TRUE)+
+  labs(title = "Previsione Drift con intervalli di confidenza")+
+  theme_linedraw()
+
+plot8<-autoplot(Vendite_Reali_CPI2) +
+autolayer(rwf(Vendite_Reali_CPI2, h=12, drift=TRUE), 
+          series="Drift", PI=FALSE)+
+  labs(title = "Previsione Drift puntuale")+
+  theme_linedraw()
+
+grid.arrange(plot7,plot8)
+```
+
+
+### 5.2 Previsione con decomposizione STL
+
+Di per se la decomposizioen STL non è un metodo di previsione. La previsione mediante STL è possibile quando noi isoliamo la parte strutturale (trend e stagionalità) per proiettarle nel futuro tramite opportuni modelli.
+
+```{r,echo=FALSE}
+stlf(Vendite_Reali_CPI2,method="rwdrift", h=12)
+autoplot(stlf(Vendite_Reali_CPI2, h=12))
+```
+
+
+### 5.3 Regressione per serie storiche
+
+La regressione per serie storiche modella la serie come combinazione di componenti osservabili. Costruiremo  un modello lineare con 3 regressori/predittori:
+
+**Trend** lineare (variabile tempo)
+
+**Dummy stagionali** per i dodici mesi 
+
+**Dummy Covid** che isola il 2020. $R$ imposterà automaticamente Gennaio come Reference Group (Categoria di riferimento).
+
+```{r,echo=TRUE}
+tt <- time(Vendite_Reali_CPI2)
+covid <- as.numeric(tt >= 2020 & tt < 2021)
+```
+
+
+```{r,echo=TRUE}
+fit.reg <- tslm(Vendite_Reali_CPI2 ~ trend + season + covid)
+summary(fit.reg)
+```
+
+Il coefficiente di `trend` è pari a circa **10,34** ed è altamente significativo.
+Al netto di stagionalità e Covid (a parità di mese e a parità di status Covid, ceteris paribus), la domanda reale di abbigliamento cresce in media di 10,34 milioni di dollari al mese, una crescita di fondo positiva ma leggera.
+
+Tutte le stime per le 11 dummy stagionali risultano significative.
+
+Gennaio (categoria di riferimento assorbita dall'intercetta) è il mese con i volumi minimi e ogni altro mese registra volumi superiori. Lo scostamento fino a **dicembre** per esempio è pari a `season12` ≈ +15443 (rispetto a gennaio), **novembre** (`season11` ≈ +7438): sono i due mesi che staccano nettamente tutti gli altri (è la conferma numerica del picco natalizio già individuato). Il coefficiente `covid` è pari a circa **−6286** ed è altamente significativo. Ne deduciamo che durante il 2020 i volumi reali sono stati in media inferiori di circa 6286 milioni di dollari: la dummy cattura così il livello medio del crollo annuo. Il modello presenta un $R^2_{adjusted}$ di **0,863** (riusciamo quindi a spiegare circa l'86% della variabilità delle vendite reali corrette per inflazione). Dal test F deduciamo che non preferiamo il modello nullo (modello con sola intercetta).
+
+```{r,echo=FALSE}
+autoplot(Vendite_Reali_CPI2, series = "Osservato") +
+  autolayer(fitted(fit.reg), series = "Stimato") +
+  labs(title = "Regressione: valori osservati vs valori stimati",
+       x = "Anno", y = "Milioni di dollari (reali)") +
+  guides(colour = guide_legend(title = "Serie")) +
+  theme_linedraw()
+```
+
+Il confronto tra serie osservata e valori stimati mostra quanto il modello di regressione sole componenti deterministiche riesca a riprodurre l'andamento reale.La dummy Covid permette al modello di adattarsi al crollo del 2020 senza che questo distorca la stima del trend e dei coefficienti stagionali. Gli eventuali scostamenti tra le due curve sono la parte non catturata dalla specificazione deterministica (residui).
+
+### 5.4 Diagnostica dei residui
+
+```{r}
+checkresiduals(fit.reg)
+qqnorm(residuals(fit.reg)); qqline(residuals(fit.reg), col = "red")
+
+```
+
+Il grafico dei residui nel tempo mostra una media prossima allo zero, segno che l'ipotesi di esogeneità degli errori è rispettata. È ben visibile lo shock 2020 testimoniando che la dummy Covid,essendo annuale, non riesce a riprodurre la caduta concentrata nei mesi del lockdown ma riesce a catturare il calo medio del 2020. 
+
+L'istogramma evidenzia una distribuzione quasi a campana, simmetrica e centrata sullo zero, complessivamente ben approssimata dalla densità normale sovrapposta; le code sono dovute essenzialmente alle osservazioni anomale del 2020. L'ipotesi di normalità dei residui può quindi ritenersi accettabile.
+
+L'ACF dei residui ci dice che la quasi tutte le autocorrelazioni ai vari ritardi superano le bande di confidenza. I residui sono dunque fortemente autocorrelati non costituendo di conseguenza un processo white noise. Il modello cattura adeguatamente le componenti deterministiche ($R^2$ dell'86%) ma non cattura bene la dinamica di breve periodo, ossia la dipendenza del valore di ciascun mese da quelli immediatamente precedenti.
+
+Dato che l'ipotesi di assenza di autocorrelazione tra i residui è violata avremo che gli intervalli prodotti dal modello di regressione tenderebbero a sottostimare/sovrastimare l'incertezza effettiva. Le stime dei coefficienti restano invece valide e correttamente interpretabili.Questo aspetto sarà determinante nel confronto tra modelli, dove potremmo preferire metodi in grado di trattare la componente autocorrelata per finalità previsive.
+
+
+```{r}
+#residui vs valori adattati e vs trend
+df.res <- data.frame(
+  fitted = as.numeric(fitted(fit.reg)),
+  resid  = as.numeric(residuals(fit.reg)),
+  trend  = as.numeric(time(Vendite_Reali_CPI2))
+)
+
+p1 <- ggplot(df.res, aes(x = fitted, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, colour = "red") +
+  labs(title = "Residui vs valori adattati",
+       x = "Valori adattati", y = "Residui") +
+  theme_linedraw()
+
+p2 <- ggplot(df.res, aes(x = trend, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_hline(yintercept = 0, colour = "red") +
+  labs(title = "Residui vs tempo",
+       x = "Anno", y = "Residui") +
+  theme_linedraw()
+
+gridExtra::grid.arrange(p1, p2, nrow = 1)
+```
+
+Esaminando i residui rispetto ai valori adattati notiamo che la nuvola centrale presenta un'ampiezza verticale sostanzialmente costante attorno allo zero, (non abbiamo la classica forma ad imbuto eteroschedastica).
+
+Il grafico residui contro tempo evidenzia che i residui non oscillano casualmente attorno allo zero ma disegnano ondulazioni.E' la manifestazione dell'autocorrelazione, dopo il 2020 i residui restano negativi. Questo ci dice che il trend lineare stimato sull'intero campione risulta ottimistico per dati recenti. Nel complesso l'ipotesi di omoschedasticità può ritenersi accettabile, con l'eccezione del 2020.
+
+
+### 5.5 Valutazione dell'accuratezza
+
+Per scegliere il modello da impiegare nella previsione finale dividiamo la serie in un insieme di **training** (su cui i modelli vengono stimati/addestrati) e un insieme di **test** (gli ultimi 12 mesi, su cui ne misuriamo le metriche di accuratezza). Mettiamo a confronto **Seasonal Naive**, **Decomposizione STL (previsione)** e **Regressione**.
+
+
+```{r,echo=TRUE}
+h <- 12
+n <- length(Vendite_Reali_CPI2)
+train <- subset(Vendite_Reali_CPI2, end = n-h)
+test  <- subset(Vendite_Reali_CPI2, start = n-h+1)
+```
+
+
+
+```{r,echo=FALSE}
+fc.snaive <- snaive(train, h = h)
+fc.stl <- stlf(train, s.window = "periodic", robust = TRUE,
+               method = "rwdrift", h = h)
+tt.train    <- time(train)
+covid.train <- as.numeric(tt.train >= 2020 & tt.train < 2021)
+fit.reg.tr  <- tslm(train ~ trend + season + covid.train)
+
+# Previsione: covid = 0 nel futuro (il 2020 è nel training)
+fc.reg <- forecast(fit.reg.tr, h = h,
+                   newdata = data.frame(covid.train = rep(0, h)))
+```
+
+Calcoliamo le metriche di accuratezza sul test analizzando MAE, RMSE, MAPE e MASE.
+
+```{r,echo=TRUE}
+acc.snaive <- accuracy(fc.snaive, test)
+acc.stl    <- accuracy(fc.stl,    test)
+acc.reg    <- accuracy(fc.reg,    test)
+
+tabella <- rbind(
+  "Seasonal naïve" = acc.snaive["Test set", c("MAE","RMSE","MAPE","MASE")],
+  "STL forecast"   = acc.stl["Test set",    c("MAE","RMSE","MAPE","MASE")],
+  "Regressione"    = acc.reg["Test set",    c("MAE","RMSE","MAPE","MASE")]
+)
+tabella
+```
+
+Confrontiamo visivamente le tre previsioni con i valori effettivamente osservati nel periodo di test.
+
+```{r,echo=FALSE}
+autoplot(Vendite_Reali_CPI2, series = "Osservato") +
+  autolayer(fc.snaive, series = "Seasonal naïve", PI = FALSE) +
+  autolayer(fc.stl,    series = "STL forecast",   PI = FALSE) +
+  autolayer(fc.reg,    series = "Regressione",    PI = FALSE) +
+  coord_cartesian(xlim = c(2024, NA)) +
+  labs(title = "Confronto delle previsioni sul test set (ultimi 12 mesi)",
+       x = "Anno", y = "Milioni di dollari (reali)") +
+  guides(colour = guide_legend(title = "Serie")) +
+  theme_linedraw()
+```
+
+La **previsione con decomposizione STL** risulta il modello più accurato: presenta i valori più bassi delle metriche di accuratezza. 
+
+Il modello di **regressione** risulta invece il meno accurato in previsione, prevede peggio del seasonal naïve, nonostante l'ottimo adattamento ai dati ('$R^2$ dell'86%).
+
+Il **seasonal naïve** si colloca nel mezzo superando la regressione.
+
+Di conseguenza il modello selezionato per la previsione finale è **previsione con decomposizione STL**.
+
+
+Possiamo inoltre valutare l'accuratezza tramite cross-validation su serie storiche. A differenza dello split fisso, questa procedura calcola l'errore di previsione a un passo lungo l'intera serie facendo poi la media dei risultati.
+
+```{r,echo=TRUE}
+e.snaive <- tsCV(Vendite_Reali_CPI2, snaive, h = 1, initial = 205)
+
+fstl <- function(y, h) stlf(y, s.window = "periodic", robust = TRUE,
+                            method = "rwdrift", h = h)
+e.stl <- tsCV(Vendite_Reali_CPI2, fstl, h = 1, initial = 205)
+rmse.cv <- c(
+  "Seasonal naïve" = sqrt(mean(e.snaive^2, na.rm = TRUE)),
+  "STL forecast"   = sqrt(mean(e.stl^2,    na.rm = TRUE))
+)
+rmse.cv
+```
+
+La cross-validation conferma nuovamente che la **decomposizione STL**, avendo un RMSE inferiore, è il modello da preferire.
+
+
+### 5.6 Previsione finale + Scenario-Based 
+
+Selezionato STL come modello più accurato, procediamo alla previsione finale a 12 mesi sulla serie reale completa. Estendiamo la decomposizione con il metodo rwdrift (random walk con drift): la componente destagionalizzata viene proiettata lungo il suo trend di fondo, e su di essa viene riapplicato il profilo stagionale stimato.
+
+```{r,echo=TRUE}
+fc.finale <- forecast(stl.fit, method = "rwdrift", h = 12)
+fc.finale
+```
+
+
+```{r,echo=FALSE}
+autoplot(fc.finale) +
+  labs(title = "Previsione a 12 mesi - STL forecast (dollari reali)",
+       x = "Anno", y = "Milioni di dollari (reali)") +
+  theme_linedraw()
+```
+
+Il grafico mostra la serie storica reale prolungata dalla previsione con relative bande di confidenza. Trattandosi di intervalli di previsione (quindi relativi a una singola osservazione futura e non alla media) hanno un ampiezza maggiore poichè costituita da 2 fonti di incertezza: L'incertezza intrinseca (irriducibile) e l'incertezza di stima.
+
+
+La previsione è espressa in dollari reali (a prezzi correnti, base = CPI dell'ultimo mese). Per tornare ai dollari nominali invertiamo la formula: poiché $x_t = \frac{y_t}{z_t}\times CPI_{base}$, si ha $y_t = \frac{x_t \times z_t}{CPI_{base}}$. Essendo il CPI futuro $z_t$ non noto lo proiettiamo sotto diversi scenari di inflazione
+
+
+```{r,echo=TRUE}
+cpi_ultimo <- cpi_base
+prev_reale <- as.numeric(fc.finale$mean)
+
+# 3 scenari
+scenari <- c(basso = 0.02, centrale = 0.03, alto = 0.05
+             )
+mesi <- 1:12
+
+nominale <- sapply(scenari, function(tasso) {
+  cpi_futuro <- cpi_ultimo * (1 + tasso)^(mesi/12)   # CPI proiettato
+  (prev_reale * cpi_futuro) / cpi_base                 # riconversione a nominale
+})
+
+nominale <- data.frame(Mese = mesi, Reale = round(prev_reale, 0), round(nominale, 0))
+nominale
+```
+
+
+```{r,echo=FALSE}
+col_sc <- c("blue","red","green")
+matplot(mesi, nominale[, c("basso","centrale","alto")], type = "l", lty = 1,
+        col = col_sc, lwd = 2,
+        xlab = "Mese previsto", ylab = "Milioni di dollari (nominali)",
+        main = "Previsione nominale sotto scenari di inflazione")
+legend("topleft", legend = c("2% (basso)","3% (centrale)","5% (alto)"),
+       col = col_sc, lwd = 2, bty = "n")
+```
+
+La previsione non fa riferimento ai mesi del calendario ma fa riferimento a 12 passi dell'orizzonte previsivo. Dato che il dataset finisce a Marzo 2026 il picco di dicembre corrisponde al 9° passo dell'orizzonte previsivo (non fa riferimento a settembre).
+
+  
+
+# 6. Conlusioni
+
+Poiché il valore nominale del mercato è strettamente legato alla dinamica dei prezzi, la sola analisi storica dei volumi non consente di elaborare previsioni affidabili. Nonostante la rimozione di trend, stagionalità e inflazione abbia isolato il segnale reale del settore, la proiezione futura ha richiesto un approccio scenario-based sulle variabili macroeconomiche. Ne consegue che l'accuratezza del forecasting quantitativo dipende strettamente dall'integrazione del contesto economico generale.
+
+
+
+# Riferimenti
+
+
+Descrizione della Monthly Retail Trade Survey (MRTS):
+<https://www.census.gov/retail/mrts/about_the_surveys.html>
+
+Serie vendite al dettaglio abbigliamento — `MRTSSM4481USN`:
+<https://fred.stlouisfed.org/series/MRTSSM4481USN>
+
+Serie vendite al dettaglio liquori — `MRTSSM4453USN`:
+<https://fred.stlouisfed.org/series/MRTSSM4453USN>
+
+Indice dei prezzi al consumo (CPI) — `CPIAUCNS`:
+<https://fred.stlouisfed.org/series/CPIAUCNS>
+
+Individuazione di Outlier nelle serie storiche:
+<https://robjhyndman.com/hyndsight/tsoutliers/>
+
+Decomposizione STL:
+<https://otexts.com/fpp2/stl.html>
+
+Destagionalizzazione X11 e X13-SEATS:
+<https://cran.r-project.org/package=seasonal>
